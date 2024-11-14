@@ -14,6 +14,7 @@ public class EffectHandler : IEffectHandler
     {
         RegisterDefault<ICalculateTargetMovePositionEffect>(new CalculateTargetPositionWithOffsetEffect(provider));
         RegisterDefault<IMovementEffect>(new BurnToTargetMovementEffect());
+        RegisterDefault<ISelectRadarTargetEffect>(new RandomSelectRadarTargetEffect());
     }
 
     public void RegisterDefault<T>(T effect)

@@ -43,6 +43,7 @@ public class BehaviorContext(
     public const string V0Property = "V0";
     public const string BrakingProperty = "Braking";
     public const string MoveModeProperty = "MoveMode";
+    public const string ContactListProperty = "ContactList";
 
     public DateTime StartedAt { get; } = DateTime.UtcNow;
     public Vec3 Velocity { get; set; }

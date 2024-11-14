@@ -8,7 +8,8 @@ using Backend.Fixture;
 using Backend.Fixture.Construct;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Mod.DynamicEncounters.Common;
+using Mod.DynamicEncounters.Common.Data;
+using Mod.DynamicEncounters.Common.Helpers;
 using Mod.DynamicEncounters.Common.Interfaces;
 using Mod.DynamicEncounters.Features.Common.Interfaces;
 using Mod.DynamicEncounters.Features.Scripts.Actions.Data;
@@ -47,7 +48,9 @@ public class SpawnScriptAction(ScriptActionItem actionItem) : IScriptAction
             .GetRequiredService<IRandomProvider>()
             .GetRandom();
 
-        var spawnCount = random.Next(actionItem.MinQuantity, actionItem.MaxQuantity);
+        var spawnCount = random.Next(actionItem.MinQuantity,
+            Math.Max(actionItem.MinQuantity, actionItem.MaxQuantity) + 1
+        );
 
         _logger.LogInformation("Generated {SpawnCount} Spawn Items", spawnCount);
 
@@ -137,12 +140,12 @@ public class SpawnScriptAction(ScriptActionItem actionItem) : IScriptAction
         ))[0];
 
         context.ConstructId = constructId;
-        
+
         _logger.LogInformation("Spawned Construct [{Name}]({Id}) at ::pos{{0,0,{Pos}}}", resultName, constructId,
             spawnPosition);
-        
+
         var isWreck = constructDef.DefinitionItem.ServerProperties.IsDynamicWreck;
-        
+
         var behaviorList = new List<string>();
 
         if (!isWreck)
@@ -221,10 +224,11 @@ public class SpawnScriptAction(ScriptActionItem actionItem) : IScriptAction
                 JsonConvert.SerializeObject(onLoadAction)
             );
         }
-        
+
         try
         {
-            await orleans.GetConstructParentingGrain().ReloadConstruct(constructId);
+            await orleans.GetConstructParentingGrain().ReloadConstruct(constructId)
+                .WithRetry(RetryOptions.Default(_logger));
         }
         catch (Exception e)
         {

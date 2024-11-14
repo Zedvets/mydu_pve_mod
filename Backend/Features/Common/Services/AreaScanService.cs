@@ -40,21 +40,25 @@ public class AreaScanService(IServiceProvider provider) : INpcRadarService
                  AND (C.json_properties->>'isUntargetable' = 'false' OR C.json_properties->>'isUntargetable' IS NULL)
                  AND (C.json_properties->>'kind' IN ('4', '5'))
                  AND (C.owner_entity_id IS NOT NULL)
+                 AND C.id != @constructId
              ORDER BY distance ASC
              LIMIT {limit}
-             """
+             """,
+            new
+            {
+                constructId = (long)constructId
+            }
         )).ToList();
 
         return rows.Select(MapToModel);
     }
 
-    
-
     private static NpcRadarContact MapToModel(DbRow row)
     {
         return new NpcRadarContact(
             row.name,
-            (ulong)row.id
+            (ulong)row.id,
+            row.distance
         );
     }
 
@@ -67,5 +71,6 @@ public class AreaScanService(IServiceProvider provider) : INpcRadarService
     {
         public long id { get; set; }
         public string name { get; set; }
+        public double distance { get; set; }
     }
 }

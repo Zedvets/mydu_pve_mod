@@ -6,16 +6,15 @@ using System.Threading.Tasks;
 using FluentMigrator.Runner;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Mod.DynamicEncounters.Features.Common.Data;
 using Mod.DynamicEncounters.Features.Common.Interfaces;
 using Mod.DynamicEncounters.Features.Scripts.Actions.Interfaces;
 using Mod.DynamicEncounters.Features.Sector.Interfaces;
-using Mod.DynamicEncounters.Features.Sector.Services;
 using Mod.DynamicEncounters.Features.Spawner.Behaviors.Effects.Interfaces;
 using Mod.DynamicEncounters.Features.Spawner.Behaviors.Interfaces;
 using Mod.DynamicEncounters.Features.Spawner.Data;
 using Mod.DynamicEncounters.Features.Spawner.Extensions;
 using Mod.DynamicEncounters.Helpers;
-using Mod.DynamicEncounters.Vector.Data;
 using NQ;
 using NQ.Interfaces;
 using NQutils.Def;
@@ -47,7 +46,7 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
         _constructService = provider.GetRequiredService<IConstructService>();
         _sectorPoolManager = provider.GetRequiredService<ISectorPoolManager>();
         _npcRadarService = provider.GetRequiredService<INpcRadarService>();
-        
+
         return Task.CompletedTask;
     }
 
@@ -59,14 +58,12 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
             return;
         }
 
-        var targetConstructId = context.GetTargetConstructId();
-
         var targetSpan = DateTime.UtcNow - context.TargetSelectedTime;
         if (context.IsMoveModeDefault() && targetSpan < TimeSpan.FromSeconds(10))
         {
             var position = await GetTargetMovePosition(context);
             if (!position.HasValue) return;
-            
+
             context.SetAutoTargetMovePosition(position.Value);
 
             return;
@@ -79,61 +76,32 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
 
         if (!context.Position.HasValue)
         {
-            var npcConstructTransform = await _constructService.NoCache().GetConstructTransformAsync(constructId);
-            if (!npcConstructTransform.ConstructExists)
-            {
-                return;
-            }
-
-            context.Position = npcConstructTransform.Position;
+            return;
         }
 
-        var npcPos = context.Position.Value;
-
-        var sectorPos = npcPos.GridSnap(SectorPoolManager.SectorGridSnap);
-        var sectorGrid = new LongVector3(sectorPos);
-
-        _logger.LogInformation("Construct {Construct} at Grid {Grid}", constructId, sectorGrid);
-
-        // var constructsOnSector = SectorGridConstructCache.FindAroundGrid(sectorGrid);
-        HashSet<ulong> radarContacts = [];
+        IList<NpcRadarContact> radarContacts = [];
 
         if (context.Position.HasValue)
         {
             var spatialQuerySw = new StopWatch();
             spatialQuerySw.Start();
 
-            radarContacts = (await _npcRadarService.ScanForPlayerContacts(constructId, context.Position.Value,
-                    DistanceHelpers.OneSuInMeters * 2.5)
-                )
-                .Select(x => x.ConstructId)
-                .ToHashSet();
-
-            // remove self
-            radarContacts.Remove(constructId);
+            radarContacts = (await _npcRadarService.ScanForPlayerContacts(
+                    constructId,
+                    context.Position.Value,
+                    DistanceHelpers.OneSuInMeters * 5
+                ))
+                .ToList();
 
             StatsRecorder.Record("NPC_Radar", sw.ElapsedMilliseconds);
         }
 
-        var result = new List<ConstructInfo>();
-        foreach (var id in radarContacts)
-        {
-            try
-            {
-                var constructInfoOutcome = await _constructService.GetConstructInfoAsync(id);
-                result.Add(constructInfoOutcome.Info);
-            }
-            catch (Exception)
-            {
-                _logger.LogError("Failed to fetch construct info for {Construct}", id);
-            }
-        }
+        context.SetProperty(
+            BehaviorContext.ContactListProperty,
+            radarContacts.ToList()
+        );
 
-        var playerConstructs = result
-            .Where(r => r.mutableData.ownerId.IsPlayer() || r.mutableData.ownerId.IsOrg())
-            .ToList();
-
-        if (playerConstructs.Count > 0)
+        if (radarContacts.Count > 0)
         {
             context.SetProperty(BehaviorContext.IdleSinceProperty, DateTime.UtcNow);
         }
@@ -141,111 +109,42 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
         {
             context.TryGetProperty(BehaviorContext.IdleSinceProperty, out var idleSince, DateTime.UtcNow);
             _logger.LogInformation("Idle since: {Date} | {Span}", idleSince, DateTime.UtcNow - idleSince);
+
+            return;
         }
-        
-        _logger.LogInformation("Found {Count} PLAYER constructs around {List}. Time = {Time}ms",
-            playerConstructs.Count,
-            string.Join(", ", playerConstructs.Select(x => x.rData.constructId)),
-            sw.ElapsedMilliseconds
+
+        var selectTargetEffect = context.Effects.GetOrNull<ISelectRadarTargetEffect>();
+
+        var selectedTarget = selectTargetEffect?.GetTarget(
+            new ISelectRadarTargetEffect.Params
+            {
+                DecisionTimeSeconds = prefab.DefinitionItem.TargetDecisionTimeSeconds, 
+                TargetDistance = prefab.DefinitionItem.TargetDistance,
+                Contacts = radarContacts,
+                Context = context
+            }
         );
 
-        ulong? targetId = null;
-        var distance = double.MaxValue;
-        const int maxIterations = 5;
-
-        const long targetingDistance = 5 * DistanceHelpers.OneSuInMeters;
-
-        foreach (var construct in playerConstructs.Take(maxIterations))
-        {
-            // Adds to the list of players involved
-            if (construct.mutableData.pilot.HasValue)
-            {
-                context.PlayerIds.Add(construct.mutableData.pilot.Value.id);
-            }
-
-            var pos = construct.rData.position;
-
-            var delta = Math.Abs(pos.Distance(npcPos));
-
-            _logger.LogInformation("Construct {Construct} Radar Sees {Target}; Distance: {Distance}su. Time = {Time}ms",
-                constructId,
-                construct.rData.constructId,
-                delta / DistanceHelpers.OneSuInMeters,
-                sw.ElapsedMilliseconds
-            );
-
-            if (delta > targetingDistance)
-            {
-                continue;
-            }
-
-            if (delta < distance)
-            {
-                distance = delta;
-                targetId = construct.rData.constructId;
-            }
-        }
-
-        if (targetId.HasValue && targetId.Value != 0)
-        {
-            context.SetAutoTargetConstructId(targetId);
-        }
-
-        if (!targetConstructId.HasValue)
+        if (selectedTarget == null)
         {
             return;
         }
 
-        var returnToSector = false;
-        if (context.Position.HasValue)
-        {
-            var targetConstructTransformOutcome =
-                await _constructService.GetConstructTransformAsync(targetConstructId.Value);
-            if (!targetConstructTransformOutcome.ConstructExists)
-            {
-                var targetPos = targetConstructTransformOutcome.Position;
+        var targetId = selectedTarget.ConstructId;
 
-                var targetDistance = (targetPos - context.Position.Value).Size();
-                if (targetDistance > 10 * DistanceHelpers.OneSuInMeters)
-                {
-                    returnToSector = true;
-                }
-            }
-
-            if (await _constructService.IsInSafeZone(targetConstructId.Value))
-            {
-                returnToSector = true;
-            }
-        }
-
-        if (returnToSector)
-        {
-            _logger.LogInformation("Construct {Construct} Returning to Sector", constructId);
-        }
+        context.SetAutoTargetConstructId(targetId);
 
         var targetMovePositionTask = GetTargetMovePosition(context);
-        var cacheTargetElementPositionsTask = CacheTargetElementPositions(context, targetConstructId);
+        var cacheTargetElementPositionsTask = CacheTargetElementPositions(context, targetId);
 
         await Task.WhenAll([targetMovePositionTask, cacheTargetElementPositionsTask]);
 
-        if (returnToSector)
-        {
-            context.SetAutoTargetMovePosition(context.Sector);
-        }
-        else
-        {
-            var position = await targetMovePositionTask;
-            if (!position.HasValue) return;
-            
-            context.SetAutoTargetMovePosition(position.Value);
+        var movePos = await targetMovePositionTask;
+        if (!movePos.HasValue) return;
 
-            await _sectorPoolManager.SetExpirationFromNow(context.Sector, TimeSpan.FromHours(1));
-        }
+        context.SetAutoTargetMovePosition(movePos.Value);
 
-        if (targetId.HasValue)
-        {
-            _logger.LogInformation("Selected a new Target: {Target}; {Time}ms", targetId, sw.ElapsedMilliseconds);
-        }
+        await _sectorPoolManager.SetExpirationFromNow(context.Sector, TimeSpan.FromHours(1));
 
         try
         {
@@ -256,7 +155,7 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
                 return;
             }
 
-            var targetConstructExists = await _constructService.Exists(targetConstructId.Value);
+            var targetConstructExists = await _constructService.Exists(targetId);
             if (!targetConstructExists)
             {
                 return;
@@ -270,12 +169,12 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
             };
 
             await _constructService.SendIdentificationNotification(
-                targetConstructId.Value,
+                targetId,
                 targeting
             );
 
             await _constructService.SendAttackingNotification(
-                targetConstructId.Value,
+                targetId,
                 targeting
             );
         }
