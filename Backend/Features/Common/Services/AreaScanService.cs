@@ -32,6 +32,7 @@ public class AreaScanService(IServiceProvider provider) : INpcRadarService
                  C.name, 
                  ST_3DDistance(C.position, ST_MakePoint({VectorToSql(position)})) as distance 
              FROM public.construct C
+             INNER JOIN public.ownership O ON O.id = C.owner_entity_id
              LEFT JOIN mod_npc_construct_handle CH ON (CH.construct_id = C.id)
              WHERE CH.id IS NULL
                  AND ST_DWithin(C.position, ST_MakePoint({VectorToSql(position)}), {radius})
@@ -40,6 +41,7 @@ public class AreaScanService(IServiceProvider provider) : INpcRadarService
                  AND (C.json_properties->>'isUntargetable' = 'false' OR C.json_properties->>'isUntargetable' IS NULL)
                  AND (C.json_properties->>'kind' IN ('4', '5'))
                  AND (C.owner_entity_id IS NOT NULL)
+                 AND (O.player_id != 4)
                  AND C.id != @constructId
              ORDER BY distance ASC
              LIMIT {limit}
