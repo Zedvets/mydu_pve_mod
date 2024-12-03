@@ -64,7 +64,7 @@ public class WeaponItem(ulong itemTypeId, string itemTypeName, WeaponUnit weapon
         cycleTimeBuffFactor = Math.Clamp(cycleTimeBuffFactor, 0.1d, 5d);
         reloadTimeBuffFactor = Math.Clamp(reloadTimeBuffFactor, 0.1d, 5d);
         magazineBuffFactor = Math.Clamp(magazineBuffFactor, 0.1d, 5d);
-        
+
         var result = 1d / Math.Clamp(
             GetSustainedRateOfFire(ammoItem, magazineBuffFactor, cycleTimeBuffFactor, reloadTimeBuffFactor),
             0.1d,
@@ -77,6 +77,18 @@ public class WeaponItem(ulong itemTypeId, string itemTypeName, WeaponUnit weapon
         }
 
         return result;
+    }
+
+    public double GetShotWaitTimePerGun(
+        AmmoItem ammoItem,
+        int weaponCount,
+        double magazineBuffFactor = 1.5d,
+        double cycleTimeBuffFactor = 1 / 1.5625d,
+        double reloadTimeBuffFactor = 1 / 1.5625d
+    )
+    {
+        return GetShotWaitTime(ammoItem, magazineBuffFactor, cycleTimeBuffFactor, reloadTimeBuffFactor) /
+            Math.Clamp(weaponCount, 1, 10);
     }
 
     private IEnumerable<AmmoItem> AmmoItems { get; } = ammoItems;

@@ -2,14 +2,19 @@
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
+using Backend.Scenegraph;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Mod.DynamicEncounters.Common.Data;
 using Mod.DynamicEncounters.Common.Interfaces;
 using Mod.DynamicEncounters.Features.Common.Data;
 using Mod.DynamicEncounters.Features.Common.Interfaces;
 using Mod.DynamicEncounters.Features.Scripts.Actions.Interfaces;
+using Mod.DynamicEncounters.Features.Spawner.Behaviors.Data;
 using Mod.DynamicEncounters.Features.Spawner.Behaviors.Interfaces;
 using Mod.DynamicEncounters.Features.Spawner.Data;
+using Mod.DynamicEncounters.Features.VoxelService.Data;
+using Mod.DynamicEncounters.Features.VoxelService.Interfaces;
 using Mod.DynamicEncounters.Helpers;
 using NQ;
 using NQ.Interfaces;
@@ -27,6 +32,8 @@ public class AggressiveBehavior(ulong constructId, IPrefab prefab) : IConstructB
 
     private bool _active = true;
     private IConstructElementsService _constructElementsService;
+    private IVoxelServiceClient _pveVoxelService;
+    private IScenegraph _sceneGraph;
 
     public bool IsActive() => _active;
 
@@ -38,10 +45,10 @@ public class AggressiveBehavior(ulong constructId, IPrefab prefab) : IConstructB
         _orleans = provider.GetOrleans();
 
         _constructElementsService = provider.GetRequiredService<IConstructElementsService>();
-
         _coreUnitElementId = await _constructElementsService.GetCoreUnit(constructId);
-
         _constructService = provider.GetRequiredService<IConstructService>();
+        _pveVoxelService = provider.GetRequiredService<IVoxelServiceClient>();
+        _sceneGraph = provider.GetRequiredService<IScenegraph>();
 
         context.Properties.TryAdd("CORE_ID", _coreUnitElementId);
 
@@ -104,16 +111,22 @@ public class AggressiveBehavior(ulong constructId, IPrefab prefab) : IConstructB
         var constructSize = (ulong)constructInfo.rData.geometry.size;
         var targetPos = targetInfo.rData.position;
 
+        if (!context.Position.HasValue) return;
+        
         var damageTrait = context.DamageData;
         if (!damageTrait.Weapons.Any())
         {
             return;
         }
 
-        if (!context.Position.HasValue) return;
-
+        context.WeaponEffectivenessData = await _constructElementsService.GetDamagingWeaponsEffectiveness(constructId);
+        if (!context.HasAnyDamagingWeapons())
+        {
+            return;
+        }
+        
         var targetDistance = context.GetTargetPosition().Distance(context.Position.Value);
-        var weapon = damageTrait.GetBestWeaponByTargetDistance(targetDistance);
+        var weapon = context.GetBestFunctionalWeaponByTargetDistance(targetDistance);
 
         if (weapon == null) return;
 
@@ -184,16 +197,18 @@ public class AggressiveBehavior(ulong constructId, IPrefab prefab) : IConstructB
             return;
         }
 
-        var functionalWeaponCount = await _constructElementsService.GetFunctionalDamageWeaponCount(constructId);
-        context.BehaviorContext.FunctionalWeaponCount = functionalWeaponCount;
-        if (functionalWeaponCount <= 0)
-        {
-            return;
-        }
+        var (functionalCount, totalCount) =
+            context.BehaviorContext.GetWeaponEffectivenessFactors(context.WeaponItem.ItemTypeName);
 
-        _logger.LogDebug("Construct {Construct} Functional Weapon Count {Count}", constructId, functionalWeaponCount);
+        if (functionalCount == 0 || totalCount == 0) return;
+        var functionalWeaponFactor = Math.Clamp((double)functionalCount / totalCount, 0d, 1d);
 
-        context.QuantityModifier = functionalWeaponCount;
+        context.BehaviorContext.FunctionalWeaponFactor = functionalWeaponFactor;
+        
+        // 2 weapons, one damaged = 2x slower
+        var cycleTimeFactor = 1 / functionalWeaponFactor;
+        
+        context.QuantityModifier = functionalCount;
         context.QuantityModifier = Math.Clamp(context.QuantityModifier, 0, prefab.DefinitionItem.MaxWeaponCount);
 
         var random = context.BehaviorContext.ServiceProvider.GetRequiredService<IRandomProvider>()
@@ -219,11 +234,25 @@ public class AggressiveBehavior(ulong constructId, IPrefab prefab) : IConstructB
 
         var ammoItem = random.PickOneAtRandom(ammoType);
         var mod = prefab.DefinitionItem.Mods;
-        
-        context.BehaviorContext.ShotWaitTime = w.GetShotWaitTime(
-            ammoItem,
-            cycleTimeBuffFactor: mod.Weapon.CycleTime
-        );
+
+        var damageModifier = context.QuantityModifier;
+
+        if (context.BehaviorContext.RealisticFiring)
+        {
+            damageModifier = 1;
+            context.BehaviorContext.ShotWaitTime = w.GetShotWaitTimePerGun(
+                ammoItem,
+                weaponCount: context.QuantityModifier,
+                cycleTimeBuffFactor: mod.Weapon.CycleTime
+            ) * cycleTimeFactor;
+        }
+        else
+        {
+            context.BehaviorContext.ShotWaitTime = w.GetShotWaitTime(
+                ammoItem,
+                cycleTimeBuffFactor: mod.Weapon.CycleTime
+            ) * cycleTimeFactor;
+        }
 
         if (totalDeltaTime < context.BehaviorContext.ShotWaitTime)
         {
@@ -233,16 +262,40 @@ public class AggressiveBehavior(ulong constructId, IPrefab prefab) : IConstructB
         var isInSafeZone = await _constructService.IsInSafeZone(constructId);
         if (isInSafeZone)
         {
+            SetShootTotalDeltaTime(context.BehaviorContext, 0);
             return;
         }
 
         if (context.TargetConstructId > 0)
         {
-            var targetInSafeZone = await _constructService.NoCache().IsInSafeZone(context.TargetConstructId);
+            var targetInSafeZone = await _constructService.IsInSafeZone(context.TargetConstructId);
             if (targetInSafeZone)
             {
+                SetShootTotalDeltaTime(context.BehaviorContext, 0);
                 return;
             }
+        }
+
+        var relativeLocation = await _sceneGraph.ResolveRelativeLocation(
+            new RelativeLocation { position = context.ConstructPosition, rotation = Quat.Identity },
+            context.TargetConstructId
+        );
+
+        var shootPointOutcome = await _pveVoxelService.QueryRandomPoint(
+            new QueryRandomPoint
+            {
+                ConstructId = context.TargetConstructId,
+                FromLocalPosition = relativeLocation.position
+            }
+        );
+        if (shootPointOutcome.Success)
+        {
+            context.HitPosition = shootPointOutcome.LocalPosition;
+            _logger.LogInformation("Hit Pos: {Pos}", context.HitPosition);
+        }
+        else
+        {
+            context.HitPosition = random.RandomDirectionVec3() * context.ConstructSize * 2;
         }
 
         SetShootTotalDeltaTime(context.BehaviorContext, 0);
@@ -250,37 +303,67 @@ public class AggressiveBehavior(ulong constructId, IPrefab prefab) : IConstructB
         var sw = new Stopwatch();
         sw.Start();
 
-        await context.NpcShotGrain.Fire(
-            w.DisplayName,
-            context.ConstructPosition,
-            constructId,
-            context.ConstructSize,
-            context.TargetConstructId,
-            context.TargetPosition,
-            new SentinelWeapon
+        var weapon = new SentinelWeapon
+        {
+            aoe = true,
+            damage = w.BaseDamage * mod.Weapon.Damage * damageModifier,
+            range = w.BaseOptimalDistance * mod.Weapon.OptimalDistance +
+                    w.FalloffDistance * mod.Weapon.FalloffDistance,
+            aoeRange = 100000,
+            baseAccuracy = w.BaseAccuracy * mod.Weapon.Accuracy,
+            effectDuration = 10,
+            effectStrength = 10,
+            falloffDistance = w.FalloffDistance * mod.Weapon.FalloffDistance,
+            falloffTracking = w.FalloffTracking * mod.Weapon.FalloffTracking,
+            fireCooldown = context.BehaviorContext.ShotWaitTime,
+            baseOptimalDistance = w.BaseOptimalDistance * mod.Weapon.OptimalDistance,
+            falloffAimingCone = w.FalloffAimingCone * mod.Weapon.FalloffAimingCone,
+            baseOptimalTracking = w.BaseOptimalTracking * mod.Weapon.OptimalTracking,
+            baseOptimalAimingCone = w.BaseOptimalAimingCone * mod.Weapon.OptimalAimingCone,
+            optimalCrossSectionDiameter = w.OptimalCrossSectionDiameter,
+            ammoItem = ammoItem.ItemTypeName,
+            weaponItem = w.ItemTypeName
+        };
+        
+        if (context.BehaviorContext.CustomActionShootEnabled)
+        {
+            var shootWeaponData = new ShootWeaponData
             {
-                aoe = true,
-                damage = w.BaseDamage * mod.Weapon.Damage * context.QuantityModifier,
-                range = w.BaseOptimalDistance * mod.Weapon.OptimalDistance +
-                        w.FalloffDistance * mod.Weapon.FalloffDistance,
-                aoeRange = 100000,
-                baseAccuracy = w.BaseAccuracy * mod.Weapon.Accuracy,
-                effectDuration = 10,
-                effectStrength = 10,
-                falloffDistance = w.FalloffDistance * mod.Weapon.FalloffDistance,
-                falloffTracking = w.FalloffTracking * mod.Weapon.FalloffTracking,
-                fireCooldown = context.BehaviorContext.ShotWaitTime,
-                baseOptimalDistance = w.BaseOptimalDistance * mod.Weapon.OptimalDistance,
-                falloffAimingCone = w.FalloffAimingCone * mod.Weapon.FalloffAimingCone,
-                baseOptimalTracking = w.BaseOptimalTracking * mod.Weapon.OptimalTracking,
-                baseOptimalAimingCone = w.BaseOptimalAimingCone * mod.Weapon.OptimalAimingCone,
-                optimalCrossSectionDiameter = w.OptimalCrossSectionDiameter,
-                ammoItem = ammoItem.ItemTypeName,
-                weaponItem = w.ItemTypeName
-            },
-            5,
-            context.HitPosition
-        );
+                Weapon = weapon,
+                CrossSection = 5,
+                ShooterName = w.DisplayName,
+                ShooterPosition = context.ConstructPosition,
+                ShooterConstructId = constructId,
+                LocalHitPosition = context.HitPosition,
+                ShooterConstructSize = context.ConstructSize,
+                ShooterPlayerId = ModBase.Bot.PlayerId,
+                TargetConstructId = context.TargetConstructId,
+                DamagesVoxel = context.BehaviorContext.DamagesVoxel
+            };
+            
+            var modManagerGrain = _orleans.GetModManagerGrain();
+            await modManagerGrain.TriggerModAction(
+                ModBase.Bot.PlayerId,
+                new ActionBuilder()
+                    .ShootWeapon(shootWeaponData)
+                    .WithConstructId(constructId)
+                    .Build()
+            );
+        }
+        else
+        {
+            await context.NpcShotGrain.Fire(
+                w.DisplayName,
+                context.ConstructPosition,
+                constructId,
+                context.ConstructSize,
+                context.TargetConstructId,
+                context.TargetPosition,
+                weapon,
+                5,
+                context.HitPosition
+            );
+        }
 
         _logger.LogInformation("Construct {Construct} Shot Weapon. Took: {Time}ms {Weapon} / {Ammo}",
             constructId,

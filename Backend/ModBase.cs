@@ -125,7 +125,7 @@ public class ModBase
             .AddSingleton<ILocalizationManager, LocalizationManager>()
             .AddTransient<IDataAccessor, DataAccessor>()
             .AddLogging(logging => logging.SetupPveModLog(logWebHostInfo: true))
-            .AddOrleansClient("IntegrationTests")
+            .AddOrleansClient("PVE")
             .AddHttpClient()
             .AddTransient<NQutils.Stats.IStats, NQutils.Stats.FakeIStats>()
             .AddSingleton<IQueuing>(sp =>

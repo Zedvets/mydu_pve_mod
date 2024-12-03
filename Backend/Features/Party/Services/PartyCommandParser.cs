@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Text;
 using BotLib.Generated;
+using Mod.DynamicEncounters.Common.Data;
 using Mod.DynamicEncounters.Features.Party.Data;
 using Mod.DynamicEncounters.Helpers;
 using NQ;
@@ -86,8 +87,11 @@ public class PartyCommandParser : IPartyCommandParser
                     async _ =>
                     {
                         await ModBase.ServiceProvider.GetOrleans().GetModManagerGrain()
-                            .TriggerModAction(instigatorPlayerId,
-                                new ModAction { actionId = 103, modName = "Mod.DynamicEncounters" });
+                            .TriggerModAction(
+                                instigatorPlayerId,
+                                new ActionBuilder()
+                                    .LoadPlayerParty()
+                                    .Build());
 
                         return PartyOperationOutcome.Successful("Loading Group UI");
                     });
@@ -154,8 +158,8 @@ public class PartyCommandParser : IPartyCommandParser
                 {
                     return PartyCommandHandlerOutcome.Failed("Missing role. Ie: @role commander");
                 }
-                
-                return PartyCommandHandlerOutcome.Execute(service => 
+
+                return PartyCommandHandlerOutcome.Execute(service =>
                     service.SetPlayerPartyRole(instigatorPlayerId, pieces.Dequeue()));
         }
 

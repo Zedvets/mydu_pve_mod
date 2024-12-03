@@ -5,7 +5,7 @@ namespace Mod.DynamicEncounters.Features.Warp.Interfaces;
 
 public interface IWarpAnchorService
 {
-    Task<CreateWarpAnchorOutcome> SpawnWarpAnchor(CreateWarpAnchorCommand command);
+    Task<CreateWarpAnchorOutcome> SpawnWarpAnchor(SpawnWarpAnchorCommand command);
     Task<CreateWarpAnchorOutcome> CreateWarpAnchorForPosition(CreateWarpAnchorCommand command);
     Task<CreateWarpAnchorOutcome> CreateWarpAnchorForward(CreateWarpAnchorForwardCommand command);
 }

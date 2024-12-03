@@ -238,7 +238,7 @@ public class QuestController : Controller
             response.TotalVolume += obj.UnitVolume * item.Quantity;
 
             var unitPrice = await marketOrderRepository.GetAveragePriceOfItemAsync(def.Id);
-            response.QuantaReward += Math.Clamp(unitPrice, 100000, long.MaxValue) * item.Quantity;;
+            response.QuantaReward += Math.Clamp(unitPrice, 100000, long.MaxValue) * item.Quantity;
         }
 
         response.ItemRewardQuantity = response.QuantaReward / request.ItemRewardPrice;

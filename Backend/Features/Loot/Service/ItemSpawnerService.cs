@@ -6,6 +6,7 @@ using Backend;
 using Backend.Business;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Mod.DynamicEncounters.Common.Data;
 using Mod.DynamicEncounters.Features.Loot.Data;
 using Mod.DynamicEncounters.Features.Loot.Interfaces;
 using Mod.DynamicEncounters.Helpers;
@@ -161,14 +162,11 @@ public class ItemSpawnerService(IServiceProvider provider) : IItemSpawnerService
 
                 await modManagerGrain.TriggerModAction(
                     ModBase.Bot.PlayerId,
-                    new ModAction
-                    {
-                        actionId = 115,
-                        playerId = ModBase.Bot.PlayerId,
-                        elementId = container,
-                        modName = "Mod.DynamicEncounters",
-                        payload = JsonConvert.SerializeObject(itemOperation)
-                    }
+                    new ActionBuilder()
+                        .GiveTakeContainer()
+                        .WithElementId(container)
+                        .WithPayload(itemOperation)
+                        .Build()
                 );
             }
             catch (Exception e)

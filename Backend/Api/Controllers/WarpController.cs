@@ -1,54 +1,16 @@
-﻿using System;
-using System.Threading.Tasks;
-using Backend.Database;
-using Dapper;
+﻿using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
-using Mod.DynamicEncounters.Database.Interfaces;
-using Mod.DynamicEncounters.Features.Common.Data;
-using Mod.DynamicEncounters.Features.Common.Interfaces;
-using Mod.DynamicEncounters.Features.ExtendedProperties.Extensions;
-using Mod.DynamicEncounters.Features.ExtendedProperties.Interfaces;
-using Mod.DynamicEncounters.Features.Scripts.Actions.Data;
-using Mod.DynamicEncounters.Features.TaskQueue.Interfaces;
 using Mod.DynamicEncounters.Features.Warp.Data;
 using Mod.DynamicEncounters.Features.Warp.Interfaces;
-using Mod.DynamicEncounters.Helpers;
+using Mod.DynamicEncounters.Vector.Helpers;
 using NQ;
-using NQutils.Sql;
 
 namespace Mod.DynamicEncounters.Api.Controllers;
 
 [Route("warp")]
 public class WarpController : Controller
 {
-    [HttpPost]
-    [Route("anchor")]
-    public async Task<IActionResult> CreateWarpAnchor([FromBody] WarpAnchorRequest request)
-    {
-        if (request.PlayerId == default)
-        {
-            return BadRequest();
-        }
-        
-        var provider = ModBase.ServiceProvider;
-        var warpAnchorService = provider.GetRequiredService<IWarpAnchorService>();
-
-        var outcome = await warpAnchorService.SpawnWarpAnchor(new CreateWarpAnchorCommand
-        {
-            PlayerId = request.PlayerId,
-            Position = request.Position,
-            ElementTypeName = request.ElementTypeName
-        });
-
-        if (!outcome.Success || !outcome.WarpAnchorConstructId.HasValue)
-        {
-            return BadRequest();
-        }
-        
-        return Ok(outcome.WarpAnchorConstructId.Value.constructId);
-    }
-
     [HttpPost]
     [Route("anchor/v2")]
     public async Task<IActionResult> CreateWarpAnchorV2([FromBody] WarpAnchorRequestV2 request)
@@ -59,120 +21,31 @@ public class WarpController : Controller
         }
 
         var provider = ModBase.ServiceProvider;
-        var sql = provider.GetRequiredService<ISql>();
-        var spawner = provider.GetRequiredService<IBlueprintSpawnerService>();
-        var taskQueueService = provider.GetRequiredService<ITaskQueueService>();
-        var traitRepository = provider.GetRequiredService<ITraitRepository>();
-        var elementTraitMap = (await traitRepository.GetElementTraits(request.ElementTypeName)).Map();
+        var warpAnchorService = provider.GetRequiredService<IWarpAnchorService>();
 
-        if (!elementTraitMap.TryGetValue("supercruise", out var trait))
-        {
-            return BadRequest($"{request.ElementTypeName} does not have Supercruise");
-        }
-
-        trait.TryGetPropertyValue("blueprintFileName", out var blueprintFileName, "Warp_Signature.json");
-        trait.TryGetPropertyValue("maxRange", out var maxRange, DistanceHelpers.OneSuInMeters * 100);
-
-        var delta = request.TargetPosition - request.FromPosition;
-        var distance = delta.Size();
-        var direction = delta.NormalizeSafe();
-        var beaconPosition = request.TargetPosition;
-
-        if (distance > maxRange)
-        {
-            beaconPosition = direction * maxRange + request.FromPosition;
-        }
-
-        const string warpDestinationConstructName = "[!] Warp Signature";
-
-        var constructId = await spawner.SpawnAsync(
-            new SpawnArgs
+        var outcome = await warpAnchorService.SpawnWarpAnchor(
+            new SpawnWarpAnchorCommand
             {
-                Folder = "pve",
-                File = blueprintFileName,
-                Position = beaconPosition,
-                IsUntargetable = true,
-                OwnerEntityId = new EntityId { playerId = request.PlayerId },
-                Name = warpDestinationConstructName
+                FromPosition = request.FromPosition,
+                TargetPosition = request.TargetPosition,
+                ElementTypeName = request.ElementTypeName,
+                PlayerId = request.PlayerId
             }
         );
 
-        var connectionFactory = provider.GetRequiredService<IPostgresConnectionFactory>();
-        using var db = connectionFactory.Create();
-
-        // Make sure the beacon is active by setting all elements to have been created 3 days in the past *shrugs*
-        await db.ExecuteAsync(
-            """
-            UPDATE public.element SET created_at = NOW() - INTERVAL '3 DAYS' WHERE construct_id = @constructId
-            """,
-            new
-            {
-                constructId = (long)constructId
-            }
-        );
-
-        await taskQueueService.EnqueueScript(
-            new ScriptActionItem
-            {
-                Type = "reload-construct",
-                ConstructId = constructId
-            },
-            DateTime.UtcNow + TimeSpan.FromSeconds(60 + 50)
-        );
-        
-        await taskQueueService.EnqueueScript(
-            new ScriptActionItem
-            {
-                Type = "delete",
-                ConstructId = constructId
-            },
-            DateTime.UtcNow + TimeSpan.FromMinutes(2)
-        );
-
-        await sql.UpdatePlayerProperty_Generic(
-            request.PlayerId,
-            "warpDestinationConstructName",
-            new PropertyValue(warpDestinationConstructName)
-        );
-
-        await sql.UpdatePlayerProperty_Generic(
-            request.PlayerId,
-            "warpDestinationConstructId",
-            new PropertyValue(constructId)
-        );
-
-        var beaconPosString = string.Join(
-            "",
-            "::pos{0,0,",
-            $"{beaconPosition.x:F}",
-            ",",
-            $"{beaconPosition.y:F}",
-            ",",
-            $"{beaconPosition.z:F}",
-            "}"
-        );
-        
-        await sql.UpdatePlayerProperty_Generic(
-            request.PlayerId,
-            "warpDestinationWorldPosition",
-            new PropertyValue(beaconPosString)
-        );
+        if (!outcome.Success)
+        {
+            return BadRequest();
+        }
 
         return Ok(
             new WarpAnchorResponse(
-                constructId,
-                warpDestinationConstructName,
-                beaconPosition,
-                beaconPosString
+                outcome.WarpAnchorConstructId.constructId,
+                outcome.WarpAnchorConstructName,
+                outcome.WarpAnchorPosition,
+                outcome.WarpAnchorPosition.Vec3ToPosition()
             )
         );
-    }
-
-    public class WarpAnchorRequest
-    {
-        public ulong PlayerId { get; set; }
-        public Vec3 Position { get; set; }
-        public string ElementTypeName { get; set; } = "WarpDrive";
     }
 
     public class WarpAnchorRequestV2

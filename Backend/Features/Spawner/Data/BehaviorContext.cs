@@ -41,6 +41,13 @@ public class BehaviorContext(
     public const string BrakingProperty = "Braking";
     public const string MoveModeProperty = "MoveMode";
 
+    public TimeSpan ActiveSectorExpirationSeconds { get; } =
+        TimeSpan.FromSeconds(prefab.DefinitionItem.SectorExpirationSeconds);
+
+    public bool PushPositionModActionEnabled { get; } = false;
+    public bool CustomActionShootEnabled { get; } = prefab.DefinitionItem.UsesCustomShootAction;
+    public bool DamagesVoxel { get; } = prefab.DefinitionItem.DamagesVoxel;
+    public bool RealisticFiring { get; } = true;
     public DateTime StartedAt { get; } = DateTime.UtcNow;
     public Vec3 Velocity { get; set; }
     public Vec3? Position { get; private set; }
@@ -73,6 +80,7 @@ public class BehaviorContext(
     }
 
     public double GetTotalDamageFromHistory() => DamageHistory.Sum(x => x.Damage);
+
     public Dictionary<ulong, double> GetTotalDamageByPlayer() => DamageHistory.GroupBy(x => x.PlayerId)
         .Select(x => new
         {
@@ -108,10 +116,10 @@ public class BehaviorContext(
         {
             return null;
         }
-        
+
         return Contacts.MinBy(x => x.Distance).ConstructId;
     }
-    
+
     public double GetAccelerationG()
     {
         var boosterG = 0d;
@@ -133,11 +141,12 @@ public class BehaviorContext(
     public double VelocityWithTargetDotProduct { get; private set; }
     public bool IsApproaching { get; set; }
     public DateTime? LastApproachingUpdate { get; set; }
+    public double MinVelocity { get; set; } = prefab.DefinitionItem.MinSpeedKph / 3.6d;
     public double MaxVelocity { get; set; } = prefab.DefinitionItem.MaxSpeedKph / 3.6d;
     public double TargetMoveDistance { get; private set; }
     public double ShotWaitTime { get; set; }
     public ConstructDamageData DamageData { get; set; } = new([]);
-    public int FunctionalWeaponCount { get; set; } = 1;
+    public Dictionary<string, List<WeaponEffectivenessData>> WeaponEffectivenessData { get; set; } = new();
     public ConcurrentDictionary<ulong, ConstructDamageData> TargetDamageData { get; set; } = new();
     public IServiceProvider ServiceProvider { get; init; } = serviceProvider;
     public readonly ConcurrentDictionary<string, bool> PublishedEvents = [];
@@ -160,6 +169,7 @@ public class BehaviorContext(
     public double ShieldPercent { get; set; } = 0;
     public bool IsShieldActive { get; set; }
     public bool IsShieldVenting { get; set; }
+    public double FunctionalWeaponFactor { get; set; }
 
     public void UpdateShieldState(ConstructInfo constructInfo)
     {
@@ -184,6 +194,46 @@ public class BehaviorContext(
         {
             Properties[key] = false;
         }
+    }
+
+    public bool HasAnyDamagingWeapons()
+    {
+        return GetAvailableWeapons().Any();
+    }
+
+    public IEnumerable<WeaponEffectivenessData> GetAvailableWeapons()
+    {
+        return WeaponEffectivenessData
+            .SelectMany(x => x.Value).Where(x => !x.IsDestroyed());
+    }
+
+    public (int functionalCount, int totalCount) GetWeaponEffectivenessFactors(string itemTypeName)
+    {
+        if (!WeaponEffectivenessData.TryGetValue(itemTypeName, out var list))
+        {
+            return (0, 1);
+        }
+
+        if (list.Count == 0)
+        {
+            return (0, 1);
+        }
+
+        var functionalCount = list.Count(x => !x.IsDestroyed());
+        var totalCount = list.Count;
+
+        return (functionalCount, totalCount);
+    }
+    
+    public WeaponItem? GetBestFunctionalWeaponByTargetDistance(double targetDistance)
+    {
+        var availableWeapons = GetAvailableWeapons()
+            .Select(w => w.Name);
+        var weapons = DamageData.Weapons
+            .Where(w => availableWeapons.Contains(w.ItemTypeName));
+
+        var damageTrait = new ConstructDamageData(weapons);
+        return damageTrait.GetBestWeaponByTargetDistance(targetDistance);
     }
 
     public bool IsBehaviorActive<T>() where T : IConstructBehavior
@@ -301,6 +351,48 @@ public class BehaviorContext(
 
     public ulong? GetTargetConstructId() => this.TargetConstructId;
 
+    private double GetOutsideOfOptimalRange2XTargetVelocity()
+    {
+        if (TargetLinearVelocity.Size() < MinVelocity)
+        {
+            return MaxVelocity / 2;
+        }
+
+        return Math.Clamp(
+            TargetLinearVelocity.Size(),
+            MinVelocity,
+            MaxVelocity
+        );
+    }
+
+    private double GetOutsideOfOptimalRangeTargetVelocity()
+    {
+        if (TargetLinearVelocity.Size() < MinVelocity)
+        {
+            return MaxVelocity / 4;
+        }
+
+        return Math.Clamp(
+            TargetLinearVelocity.Size(),
+            MinVelocity,
+            MaxVelocity
+        );
+    }
+
+    private double GetInsideOfOptimalRangeTargetVelocity()
+    {
+        if (TargetLinearVelocity.Size() < MinVelocity)
+        {
+            return MinVelocity;
+        }
+
+        return Math.Clamp(
+            TargetLinearVelocity.Size(),
+            MinVelocity,
+            MaxVelocity
+        );
+    }
+
     public double CalculateVelocityGoal()
     {
         if (!Modifiers.Velocity.Enabled) return MaxVelocity;
@@ -318,20 +410,20 @@ public class BehaviorContext(
         {
             if (oppositeVector)
             {
-                return TargetLinearVelocity.Size() * Modifiers.Velocity.OutsideOptimalRange2X.Negative;
+                return GetOutsideOfOptimalRange2XTargetVelocity() * Modifiers.Velocity.OutsideOptimalRange2X.Negative;
             }
 
-            return TargetLinearVelocity.Size() * Modifiers.Velocity.OutsideOptimalRange2X.Positive;
+            return GetOutsideOfOptimalRange2XTargetVelocity() * Modifiers.Velocity.OutsideOptimalRange2X.Positive;
         }
 
         if (IsOutsideOptimalRange())
         {
             if (oppositeVector)
             {
-                return TargetLinearVelocity.Size() * Modifiers.Velocity.OutsideOptimalRange.Negative;
+                return GetOutsideOfOptimalRangeTargetVelocity() * Modifiers.Velocity.OutsideOptimalRange.Negative;
             }
 
-            return TargetLinearVelocity.Size() * Modifiers.Velocity.OutsideOptimalRange.Positive;
+            return GetOutsideOfOptimalRangeTargetVelocity() * Modifiers.Velocity.OutsideOptimalRange.Positive;
         }
 
         if (TargetDistance < Modifiers.Velocity.TooCloseDistanceM)
@@ -341,10 +433,10 @@ public class BehaviorContext(
 
         if (oppositeVector)
         {
-            return TargetLinearVelocity.Size() * Modifiers.Velocity.InsideOptimalRange.Negative;
+            return GetInsideOfOptimalRangeTargetVelocity() * Modifiers.Velocity.InsideOptimalRange.Negative;
         }
 
-        return TargetLinearVelocity.Size() * Modifiers.Velocity.InsideOptimalRange.Positive;
+        return GetInsideOfOptimalRangeTargetVelocity() * Modifiers.Velocity.InsideOptimalRange.Positive;
     }
 
     public double CalculateMovementPredictionSeconds()

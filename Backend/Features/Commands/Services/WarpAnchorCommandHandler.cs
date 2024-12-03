@@ -56,7 +56,7 @@ public partial class WarpAnchorCommandHandler : IWarpAnchorCommandHandler
                 var outcome = await warpAnchorService.CreateWarpAnchorForPosition(
                     new CreateWarpAnchorCommand
                     {
-                        Position = posVec,
+                        TargetPosition = posVec,
                         PlayerId = instigatorPlayerId
                     }
                 );

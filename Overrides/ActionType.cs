@@ -30,5 +30,6 @@ public enum ActionType
     AcceptInvite = 113,
     PushConstructData = 114,
     GiveTakeContainer = 115,
+    ShootWeapon = 116,
     Callback = 1999999
 }

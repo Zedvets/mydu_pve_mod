@@ -22,7 +22,7 @@ public static class VectorMathHelper
             z = vec.z / value
         };
     }
-    
+
     public static Vec3 GridSnap(this Vec3 input, double snapValue)
     {
         var v = input;
@@ -52,7 +52,7 @@ public static class VectorMathHelper
 
         return Math.Sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
     }
-    
+
     public static Vec3 CrossProduct(this Vec3 v1, Vec3 v2)
     {
         return new Vec3
@@ -62,7 +62,7 @@ public static class VectorMathHelper
             z = v1.x * v2.y - v1.y * v2.x
         };
     }
-    
+
     public static Vec3 Reverse(this Vec3 vec)
     {
         return new Vec3
@@ -72,29 +72,47 @@ public static class VectorMathHelper
             z = -vec.z
         };
     }
-    
-    public static Vec3 CalculateAngularVelocity(Vec3 d0, Vec3 d, double deltaTime)
+
+    /// <summary>
+    /// Calculates the position of an object relative to another object's local space.
+    /// </summary>
+    /// <param name="targetPosition">The position of the target object (e.g., Ship A) in world space.</param>
+    /// <param name="referencePosition">The position of the reference object (e.g., Ship B) in world space.</param>
+    /// <param name="referenceRotation">The rotation of the reference object (e.g., Ship B) in world space.</param>
+    /// <returns>The relative position of the target object in the reference object's local space.</returns>
+    public static Vector3 CalculateRelativePosition(Vector3 targetPosition, Vector3 referencePosition,
+        Quaternion referenceRotation)
     {
-        if (deltaTime <= 0)
-        {
-            return d;
-        }
-        
-        Vec3 d0Normalized = d0.Normalized();
-        Vec3 dNormalized = d.Normalized();
+        // Step 1: Translate the target's position relative to the reference
+        var relativePosition = targetPosition - referencePosition;
 
-        Vec3 rotationAxis = d0Normalized.CrossProduct(dNormalized);
-        double dot = d0Normalized.Dot(dNormalized);
+        // Step 2: Rotate the relative position into the reference's local space
+        var inverseRotation = Quaternion.Inverse(referenceRotation);
+        var relativePositionInLocalSpace = Vector3.Transform(relativePosition, inverseRotation);
 
-        double angle = Math.Acos(dot); // Angle in radians
-        double angularVelocityMagnitude = angle / deltaTime;
+        return relativePositionInLocalSpace;
+    }
 
-        return new Vec3
-        {
-            x = rotationAxis.x * angularVelocityMagnitude,
-            y = rotationAxis.y * angularVelocityMagnitude,
-            z = rotationAxis.z * angularVelocityMagnitude
-        };
+    /// <summary>
+    /// Calculates the world position of an item given its relative position, the world position of the reference object, and the reference object's rotation.
+    /// </summary>
+    /// <param name="relativePosition">The position of the item relative to the reference object's local space.</param>
+    /// <param name="referencePosition">The world position of the reference object.</param>
+    /// <param name="referenceRotation">The world rotation of the reference object.</param>
+    /// <returns>The world position of the item.</returns>
+    public static Vector3 CalculateWorldPosition(
+        Vector3 relativePosition,
+        Vector3 referencePosition,
+        Quaternion referenceRotation
+    )
+    {
+        // Step 1: Rotate the relative position into world space
+        var rotatedPosition = Vector3.Transform(relativePosition, referenceRotation);
+
+        // Step 2: Translate the rotated position by the reference's world position
+        var worldPosition = rotatedPosition + referencePosition;
+
+        return worldPosition;
     }
 
     public static double Size(this Vec3 vector)
@@ -119,17 +137,17 @@ public static class VectorMathHelper
     {
         return new Vector3((float)v.x, (float)v.y, (float)v.z);
     }
-    
+
     public static Vec3 ToNqVec3(this Vector3 v)
     {
         return new Vec3 { x = v.X, y = v.Y, z = v.Z };
     }
-    
+
     public static Vector3D ToFloatVector3(this Vec3 v)
     {
         return new Vector3D((float)v.x, (float)v.y, (float)v.z);
     }
-    
+
     public static Vec3 NormalizeSafe(this Vec3 v)
     {
         var magnitude = v.Size();
@@ -191,12 +209,12 @@ public static class VectorMathHelper
     {
         return Quat.FromComponents(q.W, new Vec3 { x = q.X, y = q.Y, z = q.Z });
     }
-    
+
     public static double Dot(this Vec3 v1, Vec3 v2)
     {
         return (v1.x * v2.x) + (v1.y * v2.y) + (v1.z * v2.z);
     }
-    
+
     public static Vec3 Lerp(Vec3 start, Vec3 end, double speed, double deltaTime)
     {
         // Calculate the maximum amount to move in this frame

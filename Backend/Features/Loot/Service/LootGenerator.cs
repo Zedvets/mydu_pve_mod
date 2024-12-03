@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Mod.DynamicEncounters.Common.Interfaces;
 using Mod.DynamicEncounters.Features.Loot.Data;
+using Mod.DynamicEncounters.Features.Loot.Extensions;
 using Mod.DynamicEncounters.Features.Loot.Interfaces;
 using Mod.DynamicEncounters.Helpers;
 using NQutils.Def;
@@ -18,7 +19,6 @@ public class LootGeneratorService(IServiceProvider provider) : ILootGeneratorSer
     private readonly ILootDefinitionRepository _repository = provider.GetRequiredService<ILootDefinitionRepository>();
     private readonly IGameplayBank _bank = provider.GetGameplayBank();
     private readonly ILogger<LootGeneratorService> _logger = provider.CreateLogger<LootGeneratorService>();
-    private readonly IElementReplacerService _replacerService = provider.GetRequiredService<IElementReplacerService>();
 
     public async Task<ItemBagData> GenerateAsync(LootGenerationArgs args)
     {
@@ -42,10 +42,17 @@ public class LootGeneratorService(IServiceProvider provider) : ILootGeneratorSer
             itemRule.Sanitize();
 
             var itemDef = _bank.GetDefinition(itemRule.ItemName);
-
+            
             if (itemDef == null)
             {
                 _logger.LogError("Could not find Item def for {Item}", itemRule.ItemName);
+                continue;
+            }
+
+            var item = _bank.GetBaseObject<BaseItem>(itemDef.ItemType());
+            if (item == null)
+            {
+                _logger.LogError("Could not find BaseObject for {Item}", itemRule.ItemName);
                 continue;
             }
 
@@ -57,14 +64,10 @@ public class LootGeneratorService(IServiceProvider provider) : ILootGeneratorSer
                 continue;
             }
 
-            var isMineAbleItem = itemDef.Is<MineableMaterial>();
-
             var randomQuantity = random.NextInt64(itemRule.MinQuantity, itemRule.MaxQuantity);
             var randomCost = random.NextInt64(itemRule.MinSpawnCost, itemRule.MaxSpawnCost);
 
-            IQuantity quantity = isMineAbleItem
-                ? new LitreQuantity(randomQuantity)
-                : new DefaultQuantity(randomQuantity);
+            var quantity = item.GetQuantityForElement(randomQuantity);
 
             var stillWithinBudget = itemBag.AddEntry(
                 randomCost,

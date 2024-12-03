@@ -290,7 +290,8 @@ public class ConstructHandleDatabaseRepository(IServiceProvider provider) : ICon
                 SI.expires_at - NOW() time_span, 
                 CH.json_properties handle_properties,
                 SI.started_at,
-                SI.json_properties sector_instance_properties
+                SI.json_properties sector_instance_properties,
+                SI.name sector_name
             FROM public.mod_npc_construct_handle CH
             INNER JOIN public.mod_sector_instance SI ON (SI.sector_x = CH.sector_x AND SI.sector_y = CH.sector_y AND SI.sector_z = CH.sector_z)
             INNER JOIN public.construct C ON (C.id = CH.construct_id)
@@ -303,6 +304,7 @@ public class ConstructHandleDatabaseRepository(IServiceProvider provider) : ICon
 
         return distinctResult.Select(r => new PoiExpirationData
         {
+            SectorName = r.sector_name,
             ConstructId = (ulong)r.construct_id,
             HandleProperties = JsonConvert.DeserializeObject<ConstructHandleProperties>(r.handle_properties),
             SectorInstanceProperties = JsonConvert.DeserializeObject<SectorInstanceProperties>(r.sector_instance_properties),
@@ -389,6 +391,7 @@ public class ConstructHandleDatabaseRepository(IServiceProvider provider) : ICon
 
     private struct ConstructTimeSpanRow
     {
+        public string sector_name { get; set; }
         public long construct_id { get; set; }
         public TimeSpan time_span { get; set; }
         public DateTime? started_at { get; set; }

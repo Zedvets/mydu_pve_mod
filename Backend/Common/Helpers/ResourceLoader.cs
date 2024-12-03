@@ -8,12 +8,16 @@ public static class ResourceLoader
 {
     public static string GetContents(string resourceName)
     {
+        return GetContents(Assembly.GetExecutingAssembly(), resourceName);
+    }
+    
+    public static string GetContents(Assembly assembly, string resourceName)
+    {
         if (string.IsNullOrEmpty(resourceName))
         {
             throw new ArgumentException("Resource name cannot be null or empty.", nameof(resourceName));
         }
 
-        var assembly = Assembly.GetExecutingAssembly();
         using var stream = assembly.GetManifestResourceStream(resourceName);
         if (stream == null)
         {

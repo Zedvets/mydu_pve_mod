@@ -12,6 +12,7 @@ namespace Mod.DynamicEncounters.Features.Spawner.Behaviors;
 
 public class BrainBehavior(ulong constructId, IPrefab prefab) : IConstructBehavior
 {
+    private readonly ulong _constructId = constructId;
     public IPrefab Prefab { get; } = prefab;
     private ILogger<BrainBehavior> _logger;
     public BehaviorTaskCategory Category => BehaviorTaskCategory.MediumPriority;
@@ -35,15 +36,15 @@ public class BrainBehavior(ulong constructId, IPrefab prefab) : IConstructBehavi
         var timeToMerge = context.CalculateTimeToMergeToDistance(context.GetBestWeaponOptimalRange());
         var totalManeuverTime = brakingTime + fromZeroToTargetVelocityTime;
         
-        _logger.LogInformation("Construct {Construct} Brain. TTM={TTM}, TMT={TMT} OV={OV}, BD={BD}, BT={BT}, FZ_TTV={FZTTV}", 
-            constructId, 
-            timeToMerge,
-            totalManeuverTime,
-            oppositeV,
-            brakeDistance,
-            brakingTime,
-            fromZeroToTargetVelocityTime    
-        );
+        // _logger.LogInformation("Construct {Construct} Brain. TTM={TTM}, TMT={TMT} OV={OV}, BD={BD}, BT={BT}, FZ_TTV={FZTTV}", 
+        //     constructId, 
+        //     timeToMerge,
+        //     totalManeuverTime,
+        //     oppositeV,
+        //     brakeDistance,
+        //     brakingTime,
+        //     fromZeroToTargetVelocityTime    
+        // );
         
         if (oppositeV)
         {

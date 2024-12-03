@@ -76,7 +76,7 @@ public class AliveCheckBehavior(ulong constructId, IPrefab prefab) : IConstructB
         // just to cache it
         await Task.WhenAll([
             _constructElementsService.GetAllSpaceEnginesPower(constructId),
-            _constructElementsService.GetFunctionalDamageWeaponCount(constructId)
+            _constructElementsService.GetDamagingWeaponsEffectiveness(constructId)
         ]).OnError(
             exception =>
             {

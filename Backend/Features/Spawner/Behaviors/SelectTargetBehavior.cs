@@ -15,6 +15,7 @@ using Mod.DynamicEncounters.Features.Spawner.Behaviors.Effects.Interfaces;
 using Mod.DynamicEncounters.Features.Spawner.Behaviors.Interfaces;
 using Mod.DynamicEncounters.Features.Spawner.Data;
 using Mod.DynamicEncounters.Features.Spawner.Extensions;
+using Mod.DynamicEncounters.Features.VoxelService.Interfaces;
 using Mod.DynamicEncounters.Helpers;
 using NQ;
 using NQ.Interfaces;
@@ -32,6 +33,7 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
     private ISectorPoolManager _sectorPoolManager;
     private IAreaScanService _areaScanService;
     private IConstructDamageService _constructDamageService;
+    private IVoxelServiceClient _pveVoxelService;
 
     public bool IsActive() => _active;
 
@@ -48,6 +50,7 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
         _constructDamageService = provider.GetRequiredService<IConstructDamageService>();
         _sectorPoolManager = provider.GetRequiredService<ISectorPoolManager>();
         _areaScanService = provider.GetRequiredService<IAreaScanService>();
+        _pveVoxelService = provider.GetRequiredService<IVoxelServiceClient>();
 
         return Task.CompletedTask;
     }
@@ -101,6 +104,9 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
                 ))
                 .ToList();
 
+            await Task.WhenAll(radarContacts
+                .Select(x => _pveVoxelService.TriggerConstructCacheAsync(x.ConstructId)));
+
             StatsRecorder.Record("NPC_Radar", sw.ElapsedMilliseconds);
         }
 
@@ -146,7 +152,7 @@ public class SelectTargetBehavior(ulong constructId, IPrefab prefab) : IConstruc
         var targetVel = await _constructService.GetConstructVelocities(targetId);
         context.SetTargetLinearVelocity(targetVel.Linear);
 
-        await _sectorPoolManager.SetExpirationFromNow(context.Sector, TimeSpan.FromHours(1));
+        await _sectorPoolManager.SetExpirationFromNow(context.Sector, context.ActiveSectorExpirationSeconds);
 
         try
         {

@@ -9,10 +9,12 @@ using Backend.Scenegraph;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Mod.DynamicEncounters.Common.Helpers;
 using Mod.DynamicEncounters.Database.Interfaces;
 using Mod.DynamicEncounters.Features.Common.Data;
 using Mod.DynamicEncounters.Features.Common.Interfaces;
 using Mod.DynamicEncounters.Features.Common.Services;
+using Mod.DynamicEncounters.Features.ExtendedProperties.Extensions;
 using Mod.DynamicEncounters.Features.ExtendedProperties.Interfaces;
 using Mod.DynamicEncounters.Features.Scripts.Actions.Data;
 using Mod.DynamicEncounters.Features.TaskQueue.Interfaces;
@@ -36,38 +38,50 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
 
     private readonly IClusterClient _orleans = provider.GetRequiredService<IClusterClient>();
 
-    public async Task<CreateWarpAnchorOutcome> SpawnWarpAnchor(CreateWarpAnchorCommand command)
+    public async Task<CreateWarpAnchorOutcome> SpawnWarpAnchor(SpawnWarpAnchorCommand command)
     {
+        if (string.IsNullOrEmpty(command.ElementTypeName))
+        {
+            return CreateWarpAnchorOutcome.InvalidElementTypeName();
+        }
+
         var spawner = provider.GetRequiredService<IBlueprintSpawnerService>();
+        var sql = provider.GetRequiredService<ISql>();
         var taskQueueService = provider.GetRequiredService<ITaskQueueService>();
         var traitRepository = provider.GetRequiredService<ITraitRepository>();
         var elementTraitMap = (await traitRepository.GetElementTraits(command.ElementTypeName)).Map();
 
-        var blueprintFileName = "Warp_Signature.json";
-        if (elementTraitMap.TryGetValue("supercruise", out var trait))
+        if (!elementTraitMap.TryGetValue("supercruise", out var trait))
         {
-            if (trait.Properties.TryGetValue("blueprintFileName", out var prop))
-            {
-                blueprintFileName = prop.Prop.ValueAs<string>();
-            }
+            return CreateWarpAnchorOutcome.ElementDoesNotHaveSuperCruise(command.ElementTypeName);
         }
 
-        if (!command.Position.HasValue)
+        trait.TryGetPropertyValue("blueprintFileName", out var blueprintFileName, "Warp_Signature.json");
+        trait.TryGetPropertyValue("maxRange", out var maxRange, DistanceHelpers.OneSuInMeters * 100);
+
+        var delta = command.TargetPosition - command.FromPosition;
+        var distance = delta.Size();
+        var direction = delta.NormalizeSafe();
+        var beaconPosition = command.TargetPosition;
+
+        if (distance > maxRange)
         {
-            return CreateWarpAnchorOutcome.InvalidPosition();
+            beaconPosition = direction * maxRange + command.FromPosition;
         }
 
         try
         {
+            const string warpDestinationConstructName = "[!] Warp Signature";
+
             var constructId = await spawner.SpawnAsync(
                 new SpawnArgs
                 {
                     Folder = "pve",
                     File = blueprintFileName,
-                    Position = command.Position.Value,
+                    Position = beaconPosition,
                     IsUntargetable = true,
                     OwnerEntityId = new EntityId { playerId = command.PlayerId },
-                    Name = "[!] Warp Signature"
+                    Name = warpDestinationConstructName
                 }
             );
 
@@ -88,13 +102,46 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
             await taskQueueService.EnqueueScript(
                 new ScriptActionItem
                 {
+                    Type = "reload-construct",
+                    ConstructId = constructId
+                },
+                DateTime.UtcNow + TimeSpan.FromSeconds(60 + 50)
+            );
+
+            await taskQueueService.EnqueueScript(
+                new ScriptActionItem
+                {
                     Type = "delete",
                     ConstructId = constructId
                 },
-                DateTime.UtcNow + TimeSpan.FromMinutes(1)
+                DateTime.UtcNow + TimeSpan.FromMinutes(2)
             );
 
-            return CreateWarpAnchorOutcome.WarpAnchorCreated(constructId);
+            await sql.UpdatePlayerProperty_Generic(
+                command.PlayerId,
+                "warpDestinationConstructName",
+                new PropertyValue(warpDestinationConstructName)
+            );
+
+            await sql.UpdatePlayerProperty_Generic(
+                command.PlayerId,
+                "warpDestinationConstructId",
+                new PropertyValue(constructId)
+            );
+
+            var beaconPosString = beaconPosition.Vec3ToPosition();
+
+            await sql.UpdatePlayerProperty_Generic(
+                command.PlayerId,
+                "warpDestinationWorldPosition",
+                new PropertyValue(beaconPosString)
+            );
+
+            return CreateWarpAnchorOutcome.WarpAnchorCreated(
+                constructId, 
+                warpDestinationConstructName,
+                beaconPosition
+            );
         }
         catch (Exception e)
         {
@@ -110,7 +157,7 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
         var sql = provider.GetRequiredService<ISql>();
         var bank = provider.GetRequiredService<IGameplayBank>();
         var sceneGraph = provider.GetRequiredService<IScenegraph>();
-
+        
         var propVal = await sql.ReadPlayerProperty_Generic(playerId, pWarpAnchorTimePoint);
         if (propVal is { value: not null })
         {
@@ -135,6 +182,7 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
         }
 
         var constructId = playerLocalPosition.constructId;
+        var constructPos = await sceneGraph.GetConstructCenterWorldPosition(constructId);
 
         var constructGrain = _orleans.GetConstructGrain(constructId);
         var constructElementGrain = _orleans.GetConstructElementsGrain(constructId);
@@ -146,9 +194,9 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
             return CreateWarpAnchorOutcome.MustBePilotingConstruct();
         }
 
-        var position = command.Position ?? new Vec3();
+        var position = command.TargetPosition ?? new Vec3();
 
-        if (!command.Position.HasValue)
+        if (!command.TargetPosition.HasValue)
         {
             var waypointPosString = await sql.ReadPlayerProperty(playerId, Character.d_currentWaypoint);
 
@@ -156,7 +204,7 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
             {
                 return CreateWarpAnchorOutcome.InvalidWaypoint();
             }
-            
+
             _logger.LogInformation("Found Waypoint: {WP}", waypointPosString);
 
             try
@@ -193,21 +241,24 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
 
         try
         {
-            var propValue = await sql.ReadPlayerProperty_Generic(playerId, pWarpAnchorTimePoint);
-            if (propValue?.value == null)
+            if (EnvironmentVariableHelper.IsProduction())
             {
-                await sql.SetPlayerProperties(playerId, new Dictionary<string, PropertyValue>
+                var propValue = await sql.ReadPlayerProperty_Generic(playerId, pWarpAnchorTimePoint);
+                if (propValue?.value == null)
                 {
-                    { pWarpAnchorTimePoint, new PropertyValue(TimePoint.Now().networkTime) }
-                });
-            }
-            else
-            {
-                await sql.UpdatePlayerProperty_Generic(
-                    playerId,
-                    pWarpAnchorTimePoint,
-                    new PropertyValue(TimePoint.Now().networkTime)
-                );
+                    await sql.SetPlayerProperties(playerId, new Dictionary<string, PropertyValue>
+                    {
+                        { pWarpAnchorTimePoint, new PropertyValue(TimePoint.Now().networkTime) }
+                    });
+                }
+                else
+                {
+                    await sql.UpdatePlayerProperty_Generic(
+                        playerId,
+                        pWarpAnchorTimePoint,
+                        new PropertyValue(TimePoint.Now().networkTime)
+                    );
+                }
             }
         }
         catch (Exception e)
@@ -222,12 +273,14 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
 
         try
         {
-            return await SpawnWarpAnchor(new CreateWarpAnchorCommand
-            {
-                PlayerId = command.PlayerId,
-                Position = position,
-                ElementTypeName = driveDef.Name
-            });
+            return await SpawnWarpAnchor(
+                new SpawnWarpAnchorCommand
+                {
+                    PlayerId = command.PlayerId,
+                    FromPosition = constructPos,
+                    TargetPosition = position,
+                    ElementTypeName = driveDef.Name
+                });
         }
         catch (Exception e)
         {
@@ -249,11 +302,11 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
         }
 
         var constructId = playerLocalPosition.constructId;
-        
+
         var info = await constructService.GetConstructInfoAsync(constructId);
         var quat = info.Info!.rData.rotation.ToQuat();
         var pos = await sceneGraph.GetConstructCenterWorldPosition(constructId);
-        
+
         var forward = Vector3.Transform(Vector3.UnitY, quat);
         var aheadPos = pos + forward.ToNqVec3() * command.Distance * DistanceHelpers.OneSuInMeters;
 
@@ -261,7 +314,7 @@ public class WarpAnchorService(IServiceProvider provider) : IWarpAnchorService
             new CreateWarpAnchorCommand
             {
                 PlayerId = command.PlayerId,
-                Position = aheadPos,
+                TargetPosition = aheadPos,
             }
         );
     }

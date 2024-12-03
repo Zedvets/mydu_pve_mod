@@ -61,15 +61,15 @@ public class CalculateTargetMovePositionWithOffsetEffect(IServiceProvider provid
             LastTimeOffsetUpdated = DateTime.UtcNow;
         }
 
-        var futurePosition = VelocityHelper.CalculateFuturePosition(
-            targetPos,
-            @params.TargetConstructLinearVelocity,
-            @params.TargetConstructAcceleration,
-            @params.PredictionSeconds
-        );
+        // var futurePosition = VelocityHelper.CalculateFuturePosition(
+        //     targetPos,
+        //     @params.TargetConstructLinearVelocity,
+        //     @params.TargetConstructAcceleration,
+        //     @params.PredictionSeconds
+        // );
 
-        logger.LogInformation("FUTURE POS DELTA: {A} {D}", @params.TargetConstructAcceleration,
-            futurePosition - targetPos);
+        // logger.LogInformation("FUTURE POS DELTA: {A} {D}", @params.TargetConstructAcceleration,
+        //     futurePosition - targetPos);
         //targetPos + Offset
         return TargetMovePositionCalculationOutcome.ValidCalculation(targetPos + Offset);
     }

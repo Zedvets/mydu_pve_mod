@@ -111,6 +111,7 @@ public class SectorPoolManager(IServiceProvider serviceProvider) : ISectorPoolMa
             var instance = new SectorInstance
             {
                 Id = Guid.NewGuid(),
+                Name = encounter.Name,
                 Sector = position,
                 FactionId = args.FactionId,
                 CreatedAt = DateTime.UtcNow,
@@ -411,7 +412,6 @@ public class SectorPoolManager(IServiceProvider serviceProvider) : ISectorPoolMa
     {
         var constructHandleRepository = serviceProvider.GetRequiredService<IConstructHandleRepository>();
         var items = (await constructHandleRepository.GetPoiConstructExpirationTimeSpansAsync()).ToList();
-        var orleans = serviceProvider.GetOrleans();
 
         _logger.LogInformation("Update Expiration Names found: {Count}", items.Count);
 
@@ -422,14 +422,10 @@ public class SectorPoolManager(IServiceProvider serviceProvider) : ISectorPoolMa
         {
             try
             {
-                var constructInfoGrain = orleans.GetConstructInfoGrain(item.ConstructId);
-                var constructInfo = await constructInfoGrain.Get();
-                var constructName = constructInfo.rData.name;
-
-                var newName = $"{constructName} | [{(int)item.ExpiresAt.TotalMinutes}m]";
+                var newName = $"{item.SectorName} [{(int)item.ExpiresAt.TotalMinutes}m]";
                 if (item.StartedAt.HasValue && item.SectorInstanceProperties.HasActiveMarker)
                 {
-                    newName = $"{constructName} | [!!!]";
+                    newName = $"{item.SectorName} [!!!]";
                 }
 
                 var constructService = serviceProvider.GetRequiredService<IConstructService>();

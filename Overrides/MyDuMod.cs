@@ -165,6 +165,10 @@ public class MyDuMod : IMod
 
         switch ((ActionType)action.actionId)
         {
+            case ActionType.ShootWeapon:
+                var shootWeaponAction = new ShootWeaponAction(_provider);
+                await shootWeaponAction.HandleAction(playerId, action);
+                break;
             case ActionType.SendConstructAppear:
                 var sendConstructAppearAction = new SendConstructAppearAction(_provider);
                 await sendConstructAppearAction.HandleAction(playerId, action);

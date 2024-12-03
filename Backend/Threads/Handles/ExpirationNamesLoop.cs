@@ -27,7 +27,7 @@ public class ExpirationNamesLoop(IThreadManager tm, CancellationToken ct) :
             }
 
             ReportHeartbeat();
-            Thread.Sleep(TimeSpan.FromSeconds(30));
+            Thread.Sleep(TimeSpan.FromSeconds(5));
         }
         catch (Exception e)
         {

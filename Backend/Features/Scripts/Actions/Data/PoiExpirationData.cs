@@ -5,6 +5,7 @@ namespace Mod.DynamicEncounters.Features.Scripts.Actions.Data;
 
 public class PoiExpirationData
 {
+    public required string SectorName { get; set; }
     public required ConstructHandleProperties HandleProperties { get; init; }
     public required SectorInstanceProperties SectorInstanceProperties { get; init; }
     public required ulong ConstructId { get; init; }

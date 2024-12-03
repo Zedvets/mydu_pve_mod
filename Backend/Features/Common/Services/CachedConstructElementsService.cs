@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Mod.DynamicEncounters.Features.Common.Data;
 using Mod.DynamicEncounters.Features.Common.Interfaces;
 using NQ;
 
@@ -21,7 +22,8 @@ public class CachedConstructElementsService(
     private readonly TemporaryMemoryCache<ulong, IEnumerable<ElementId>> _pvpSeatUnits = new(nameof(_pvpSeatUnits), expirationTimeSpan);
     private readonly TemporaryMemoryCache<ulong, IEnumerable<ElementId>> _spaceEngineUnits = new(nameof(_spaceEngineUnits), powerCheckTimeSpan);
     private readonly TemporaryMemoryCache<ulong, double> _spaceEnginePowers = new(nameof(_spaceEnginePowers), powerCheckTimeSpan);
-    private readonly TemporaryMemoryCache<ulong, int> _functionalWeaponCount = new(nameof(_functionalWeaponCount), powerCheckTimeSpan);
+    private readonly TemporaryMemoryCache<ulong, Dictionary<string, List<WeaponEffectivenessData>>> _weaponEffectiveness = 
+        new(nameof(_weaponEffectiveness), powerCheckTimeSpan);
     private readonly TemporaryMemoryCache<ulong, ElementId> _coreUnits = new(nameof(_coreUnits), coreUnitCacheTimeSpan);
     private readonly TemporaryMemoryCache<ulong, ElementInfo> _elementInfos = new(nameof(_elementInfos), expirationTimeSpan);
 
@@ -79,12 +81,11 @@ public class CachedConstructElementsService(
         );
     }
 
-    public Task<int> GetFunctionalDamageWeaponCount(ulong constructId)
+    public Task<Dictionary<string, List<WeaponEffectivenessData>>> GetDamagingWeaponsEffectiveness(ulong constructId)
     {
-        return _functionalWeaponCount.TryGetOrSetValue(
+        return _weaponEffectiveness.TryGetOrSetValue(
             constructId,
-            () => service.GetFunctionalDamageWeaponCount(constructId),
-            val => val <= 0
+            () => service.GetDamagingWeaponsEffectiveness(constructId)
         );
     }
 

@@ -1,9 +1,15 @@
-﻿using System.Linq;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
+using Backend;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Mod.DynamicEncounters.Features.Loot.Data;
 using Mod.DynamicEncounters.Features.Loot.Interfaces;
+using Mod.DynamicEncounters.Helpers;
+using MongoDB.Driver.Linq;
+using NQutils.Def;
 
 namespace Mod.DynamicEncounters.Api.Controllers;
 
@@ -74,5 +80,53 @@ public class LootController : Controller
         await itemSpawner.SpawnItems(new SpawnItemOnRandomContainersCommand((ulong)constructId, itemBag));
 
         return Ok();
+    }
+
+    [HttpGet]
+    [Route("item-type/{itemTypeName}/tier/{tier:int}")]
+    public async Task<IActionResult> CreateItemTypeLoot(string itemTypeName, int tier)
+    {
+        await Task.Yield();
+
+        var provider = ModBase.ServiceProvider;
+        var bank = provider.GetGameplayBank();
+
+        var definition = bank.GetDefinition(itemTypeName);
+
+        if (definition == null)
+        {
+            return NotFound();
+        }
+
+        var items = new List<IGameplayDefinition>();
+
+        EnumerateItemsRecursive(definition, items);
+
+        items = items.Where(x => x.BaseObject.hidden == false)
+            .Where(x => x.BaseObject is BaseItem baseItem && baseItem.level == tier)
+            .ToList();
+        
+        return Ok(items
+            .Select(x => new LootDefinitionItem
+                .LootItemRule(x.Name)
+                {
+                    MinQuantity = 1,
+                    MaxQuantity = 10,
+                    Chance = 1,
+                }));
+    }
+
+    private static void EnumerateItemsRecursive(IGameplayDefinition definition, IList<IGameplayDefinition> result)
+    {
+        if (!definition.GetChildren().Any())
+        {
+            result.Add(definition);
+            return;
+        }
+
+        foreach (var child in definition.GetChildren())
+        {
+            EnumerateItemsRecursive(child, result);
+        }
     }
 }
