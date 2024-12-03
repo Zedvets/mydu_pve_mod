@@ -24,7 +24,7 @@ namespace Mod.DynamicEncounters.Features.Sector.Services;
 
 public class SectorPoolManager(IServiceProvider serviceProvider) : ISectorPoolManager
 {
-    public const double SectorGridSnap = DistanceHelpers.OneSuInMeters * 20;
+    public const double SectorGridSnap = DistanceHelpers.OneSuInMeters * 1;
 
     private readonly IRandomProvider _randomProvider = serviceProvider.GetRequiredService<IRandomProvider>();
 

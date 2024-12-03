@@ -13,7 +13,7 @@ window.setInterval = function (callback, delay = 0) {
 window.postMessage = function (message) {
     pm({
         type: message.type,
-        origin: 'http://127.0.0.1/:9000',
+        origin: 'http://moddynamicencounters/:9000',
         target: window,
         data: message,
     });
